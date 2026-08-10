@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: faceswap/web:latest
+    ports:
+      - "80:80"
+      - "8000:8000"  # uvicorn container port (if needed)
+    environment:
+      - SECRET_TOKEN=testing123
+      - WORKER_PORT=8000
+      - MODEL_DIR=/workspace/model/checkpoints
+    volumes:
+      - ./model:/workspace/model  # optional local model mount
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped

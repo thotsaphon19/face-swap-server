@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FaceSwap PWA (Prototype)</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main>
+    <h1>FaceSwap PWA (Prototype)</h1>
+
+    <section id="controls">
+      <label>Resolution:
+        <select id="resolution">
+          <option value="640x480">640x480</option>
+          <option value="1280x720">1280x720</option>
+          <option value="320x240">320x240</option>
+        </select>
+      </label>
+
+      <label>FPS:
+        <input id="fps" type="range" min="1" max="15" value="8" />
+        <span id="fpsVal">8</span>
+      </label>
+
+      <label>
+        Backend WS URL:
+        <input id="wsUrl" type="text" value="wss://<YOUR_PUBLIC_DOMAIN>/ws" />
+      </label>
+
+      <label>
+        Token:
+        <input id="token" type="text" value="testing123" />
+      </label>
+
+      <div>
+        <button id="startBtn">Start Camera</button>
+        <button id="connectBtn">Connect WS</button>
+        <button id="startStreamBtn">Start Stream → Worker</button>
+        <button id="stopStreamBtn" disabled>Stop Stream</button>
+      </div>
+    </section>
+
+    <section id="videoArea">
+      <div class="column">
+        <h3>Local Preview</h3>
+        <video id="localVideo" autoplay playsinline muted></video>
+        <canvas id="captureCanvas" style="display:none;"></canvas>
+      </div>
+
+      <div class="column">
+        <h3>Remote Result</h3>
+        <img id="remoteImg" alt="Processed output" />
+      </div>
+    </section>
+
+    <section id="status">
+      <div>WS: <span id="wsStatus">disconnected</span></div>
+      <div>Sent frames: <span id="sentCount">0</span></div>
+      <div>Received frames: <span id="recvCount">0</span></div>
+      <div>Latency (roundtrip ms): <span id="latency">-</span></div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
