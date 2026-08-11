@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Header, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os, io, logging, asyncio, json
 from PIL import Image
 import numpy as np
@@ -17,11 +18,24 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 SECRET_TOKEN = os.getenv("SECRET_TOKEN", "testing123")
 MODEL_DIR = os.getenv("MODEL_DIR", "/workspace/model/checkpoints")
 DEVICE = "cuda" if torch and torch.cuda.is_available() else "cpu"
+# Comma-separated list of allowed CORS origins; use * to allow all
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger("face-swap-server")
 
 app = FastAPI(title="face-swap-server", version="0.1")
+
+# Allow requests from Flutter app (and web PWA).
+# When CORS_ORIGINS is "*", credentials must be disabled (CORS spec requirement).
+_cors_wildcard = CORS_ORIGINS == ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=not _cors_wildcard,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _model = None
 _model_lock = asyncio.Lock()
@@ -61,7 +75,7 @@ def tensor_to_pil(tensor):
 
 @app.get("/health")
 async def health():
-    return {"status":"ok", "device": DEVICE}
+    return {"status": "ok", "device": DEVICE, "model_dir": MODEL_DIR}
 
 def check_auth_header(auth_header: Optional[str]):
     if SECRET_TOKEN:
