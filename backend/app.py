@@ -77,6 +77,25 @@ def tensor_to_pil(tensor):
 async def health():
     return {"status": "ok", "device": DEVICE, "model_dir": MODEL_DIR}
 
+@app.get("/connect")
+async def connect_info():
+    """Flutter client calls this to confirm backend is reachable and learn session details."""
+    return {
+        "status": "ready",
+        "device": DEVICE,
+        "ws_path": "/ws",
+        "process_path": "/v1/process_frame",
+        "auth_required": bool(SECRET_TOKEN),
+    }
+
+@app.get("/session")
+async def session_status():
+    """Returns lightweight session state (model loaded, device info)."""
+    return {
+        "model_loaded": _model is not None,
+        "device": DEVICE,
+    }
+
 def check_auth_header(auth_header: Optional[str]):
     if SECRET_TOKEN:
         if not auth_header:

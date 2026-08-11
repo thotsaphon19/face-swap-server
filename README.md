@@ -1,5 +1,9 @@
 # face-swap-server — MVP Camera-Streaming + Face-Swap System
 
+> ⚠️ **ตรวจสอบก่อนใช้งานจริง**: ไฟล์นี้รวมเนื้อหาจาก 2 branch ที่มีรายละเอียดขัดแย้งกัน กรุณาเช็ค 2 จุดนี้กับโค้ดจริงก่อน commit:
+> 1. Backend มี endpoint `/connect` และ `/session` จริงหรือไม่ (ดูใน `backend/app.py`)
+> 2. มีไฟล์ `deploy/runpod_setup.sh` และ `deploy/digitalocean_setup.sh` จริงหรือไม่
+
 ## Overview
 
 This repository implements a mobile-to-server camera-streaming and face-swap system:
@@ -20,7 +24,7 @@ This repository implements a mobile-to-server camera-streaming and face-swap sys
 |------|---------|
 | `backend/app.py` | FastAPI backend — HTTP REST + WebSocket binary frame handler |
 | `frontend/` | PWA web client (existing, preserved) |
-| `flutter_app/` | **NEW** Flutter mobile app for Android / iOS |
+| `flutter_client/` | Flutter mobile app for Android / iOS |
 | `deploy/` | Nginx config, Runpod & DigitalOcean setup scripts |
 | `Dockerfile` | CPU production image |
 | `Dockerfile.gpu` | GPU production image (CUDA) |
@@ -33,7 +37,7 @@ This repository implements a mobile-to-server camera-streaming and face-swap sys
 ```bash
 # 1. Copy and edit environment
 cp .env.example .env
-# Edit SECRET_TOKEN, etc.
+# Edit SECRET_TOKEN, RUNPOD_URL if needed
 
 # 2. Build & run (CPU mode)
 docker compose up -d --build
@@ -41,6 +45,7 @@ docker compose up -d --build
 # 3. Open PWA: http://localhost
 # 4. Health check
 curl http://localhost/health
+curl http://localhost/connect
 ```
 
 To run the GPU worker (requires NVIDIA Docker runtime):
@@ -50,10 +55,10 @@ docker compose --profile gpu up -d gpu_worker
 
 ### Notes
 - For real-time low-latency, WebRTC (aiortc/pion) is preferred instead of WebSocket frames. This repo uses a WebSocket binary frame approach for simplicity.
-- Replace the dummy model loader in `backend/app.py` with your real model loading & inference steps.
+- Replace the dummy model loader in `backend/app.py` (`load_model()`) with your real model loading & inference steps.
 
 ### GitHub Actions image publishing
-- The `docker-image.yml` workflow publishes `latest` to Docker Hub.
+- The `docker-image.yml` workflow publishes `latest` to Docker Hub (and/or `ghcr.io/thotsaphon19/face-swap-server:latest` — confirm which registry is actually configured).
 - Configure these repository secrets before running the workflow:
   - `DOCKERHUB_USERNAME` : your Docker Hub username (namespace)
   - `DOCKERHUB_TOKEN` : Docker Hub access token with push permission
@@ -62,11 +67,24 @@ docker compose --profile gpu up -d gpu_worker
 
 ## 2 · Backend API
 
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/health` | GET | none | Liveness check, returns device & model dir |
-| `/v1/process_frame` | POST (multipart) | ****** | Single JPEG frame → returns processed JPEG |
-| `/ws?token=TOKEN` | WebSocket | query param | Bidirectional binary frame stream |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | No | Liveness check, returns device & model dir |
+| GET | `/connect` | No | Flutter client discovery; returns `status`, `ws_path`, `auth_required` *(verify this exists)* |
+| GET | `/session` | No | Model load status and device info *(verify this exists)* |
+| POST | `/v1/process_frame` | ****** | Upload JPEG → returns processed JPEG |
+| WS | `/ws?token=<token>` | Token in query | Binary JPEG frames in → processed JPEG bytes out |
+
+### `/connect` response example
+```json
+{
+  "status": "ready",
+  "device": "cpu",
+  "ws_path": "/ws",
+  "process_path": "/v1/process_frame",
+  "auth_required": true
+}
+```
 
 ### WebSocket protocol
 - **Client → Server**: raw JPEG bytes
@@ -77,11 +95,12 @@ docker compose --profile gpu up -d gpu_worker
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SECRET_TOKEN` | `testing123` | ****** for auth |
+| `SECRET_TOKEN` | `testing123` | ****** for auth (`/v1/process_frame` and WebSocket) |
 | `WORKER_PORT` | `8000` | Port for uvicorn |
 | `MODEL_DIR` | `/workspace/model/checkpoints` | Path to model checkpoint files |
-| `LOG_LEVEL` | `INFO` | Python log level |
+| `LOG_LEVEL` | `info` | Python log level |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `RUNPOD_URL` | *(unset)* | Runpod GPU endpoint (for control-plane proxy use, if applicable) |
 
 ---
 
@@ -96,7 +115,7 @@ docker compose --profile gpu up -d gpu_worker
 ### Build & Install APK (Android)
 
 ```bash
-cd flutter_app
+cd flutter_client
 
 # 1. Install dependencies
 flutter pub get
@@ -120,16 +139,16 @@ flutter install
 ### Build for iOS
 
 ```bash
-cd flutter_app
+cd flutter_client
 flutter pub get
 open ios/Runner.xcworkspace   # set signing in Xcode
 flutter build ios --release
 ```
 
 ### App usage
-1. Launch **FaceSwap Cam** on your phone
+1. Launch the app on your phone
 2. Tap the ⚙️ **Settings** icon
-3. Set **WebSocket URL** (e.g. `ws://192.168.1.100/ws` or `wss://your-domain.com/ws`)
+3. Set **WebSocket URL** (e.g. `ws://192.168.1.100/ws` or `wss://your-domain.com/ws`) — or, if using `/connect` discovery, just enter `http://<server-ip>` and tap **Save & Connect**
 4. Set **Auth Token** (must match `SECRET_TOKEN` on server)
 5. Choose FPS (recommended: 8–15) and camera resolution
 6. Tap **Save & Reconnect Camera**
@@ -142,26 +161,42 @@ flutter build ios --release
 
 > Best for GPU inference (face-swap model). Pair with DigitalOcean for the web/WS proxy.
 
-### Steps
+### Option A — using setup script (recommended if `deploy/runpod_setup.sh` exists)
 
 ```bash
 # On a Runpod GPU pod (RTX 3090 / A5000 / A100):
 
-# 1. Clone repo
 git clone https://github.com/thotsaphon19/face-swap-server.git /workspace/face-swap-server
 cd /workspace/face-swap-server
 
-# 2. Run setup script
 SECRET_TOKEN=your_secret_token bash deploy/runpod_setup.sh
 
-# 3. Upload model checkpoints
+# Upload model checkpoints
 # scp ./your_model.pth root@<pod-ip>:/workspace/model/checkpoints/
 
-# 4. Test health
 curl http://localhost:8000/health
 # {"status":"ok","device":"cuda","model_dir":"/workspace/model/checkpoints"}
 
-# 5. Expose via Runpod TCP proxy → port 8000
+# Expose via Runpod TCP proxy → port 8000
+```
+
+### Option B — manual build (if the setup script doesn't exist)
+
+```bash
+ssh <your-pod-id>@ssh.runpod.io -i ~/.ssh/id_ed25519
+
+cd /workspace
+git clone https://github.com/thotsaphon19/face-swap-server.git
+cd face-swap-server
+
+cp .env.example .env
+# Edit .env as needed
+
+docker build -f Dockerfile.gpu -t face-swap-gpu:latest .
+docker run -d --name face-swap-gpu --restart unless-stopped \
+  -p 8000:8000 --env-file .env face-swap-gpu:latest
+
+curl http://127.0.0.1:8000/health
 ```
 
 **Flutter WS URL for Runpod:**
@@ -178,23 +213,48 @@ ws://<RUNPOD_PUBLIC_HOST>:<TCP_PORT>/ws?token=your_secret_token
 ### Minimum spec
 - Ubuntu 22.04, 2 vCPU, 4 GB RAM
 
-### Steps
+### Option A — using setup script (recommended if `deploy/digitalocean_setup.sh` exists)
 
 ```bash
-# On the DigitalOcean droplet (as root):
-
-# 1. Clone repo
 git clone https://github.com/thotsaphon19/face-swap-server.git /opt/face-swap-server
+cd /opt/face-swap-server
 
-# 2. Run setup script
-SECRET_TOKEN=your_secret_token bash /opt/face-swap-server/deploy/digitalocean_setup.sh
+SECRET_TOKEN=your_secret_token bash deploy/digitalocean_setup.sh
 
-# 3. (Optional) set DOMAIN for HTTPS
+# (Optional) set DOMAIN for HTTPS
 DOMAIN=yourdomain.com SECRET_TOKEN=your_secret_token \
-    bash /opt/face-swap-server/deploy/digitalocean_setup.sh
+    bash deploy/digitalocean_setup.sh
 
-# 4. Verify
 curl http://<DROPLET_IP>/health
+curl http://<DROPLET_IP>/connect
+```
+
+### Option B — manual setup (if the setup script doesn't exist)
+
+```bash
+ssh root@<your-droplet-ip>
+
+apt update && apt install -y git curl
+curl -fsSL https://get.docker.com | sh
+
+cd /opt
+git clone https://github.com/thotsaphon19/face-swap-server.git
+cd face-swap-server
+
+cp .env.example .env
+# Edit .env: set SECRET_TOKEN (and optionally RUNPOD_URL)
+
+docker compose up -d --build
+curl http://localhost/health
+curl http://localhost/connect
+```
+
+Open firewall:
+```bash
+ufw allow OpenSSH
+ufw allow 80
+ufw allow 443
+ufw --force enable
 ```
 
 **Flutter WS URL for DigitalOcean:**
@@ -226,7 +286,7 @@ Phase 2 (consolidate):
 For Phase 1, configure DigitalOcean Nginx to reverse-proxy to the Runpod public URL:
 
 ```nginx
-location ~ ^/(v1|ws|health) {
+location ~ ^/(v1|ws|health|connect|session)$ {
     proxy_pass http://<RUNPOD_HOST>:<TCP_PORT>;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
