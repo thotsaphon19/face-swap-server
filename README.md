@@ -48,6 +48,16 @@ To run the GPU worker (requires NVIDIA Docker runtime):
 docker compose --profile gpu up -d gpu_worker
 ```
 
+### Notes
+- For real-time low-latency, WebRTC (aiortc/pion) is preferred instead of WebSocket frames. This repo uses a WebSocket binary frame approach for simplicity.
+- Replace the dummy model loader in `backend/app.py` with your real model loading & inference steps.
+
+### GitHub Actions image publishing
+- The `docker-image.yml` workflow publishes `latest` to Docker Hub.
+- Configure these repository secrets before running the workflow:
+  - `DOCKERHUB_USERNAME` : your Docker Hub username (namespace)
+  - `DOCKERHUB_TOKEN` : Docker Hub access token with push permission
+
 ---
 
 ## 2 · Backend API
