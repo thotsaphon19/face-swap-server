@@ -9,10 +9,37 @@ services:
       - "80:80"
       - "8000:8000"  # uvicorn container port (if needed)
     environment:
-      - SECRET_TOKEN=testing123
+      - SECRET_TOKEN=${SECRET_TOKEN:-changeme}
       - WORKER_PORT=8000
       - MODEL_DIR=/workspace/model/checkpoints
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
     volumes:
       - ./model:/workspace/model  # optional local model mount
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
+
+  # GPU service – run on Runpod or any host with NVIDIA Docker runtime.
+  # Start with: docker compose --profile gpu up -d gpu_worker
+  gpu_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: faceswap/gpu:latest
+    profiles: ["gpu"]
+    ports:
+      - "8001:8000"
+    environment:
+      - SECRET_TOKEN=${SECRET_TOKEN:-changeme}
+      - MODEL_DIR=/workspace/model/checkpoints
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    volumes:
+      - ./model:/workspace/model
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
