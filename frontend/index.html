@@ -12,6 +12,11 @@
     <h1>FaceSwap PWA (Prototype)</h1>
 
     <section id="controls">
+      <label>
+        Backend API Base:
+        <input id="apiBaseUrl" type="text" value="" placeholder="https://api.example.com" />
+      </label>
+
       <label>Resolution:
         <select id="resolution">
           <option value="640x480">640x480</option>
@@ -37,6 +42,13 @@
 
       <div>
         <button id="startBtn">Start Camera</button>
+        <button id="loadConfigBtn">Load Server Config</button>
+        <button id="createSessionBtn">Create Session</button>
+        <button id="startSessionBtn" disabled>Start Session</button>
+        <button id="stopSessionBtn" disabled>Stop Session</button>
+      </div>
+
+      <div>
         <button id="connectBtn">Connect WS</button>
         <button id="startStreamBtn">Start Stream → Worker</button>
         <button id="stopStreamBtn" disabled>Stop Stream</button>
@@ -57,6 +69,8 @@
     </section>
 
     <section id="status">
+      <div>Session: <span id="sessionStatus">not-created</span></div>
+      <div>Session ID: <span id="sessionId">-</span></div>
       <div>WS: <span id="wsStatus">disconnected</span></div>
       <div>Sent frames: <span id="sentCount">0</span></div>
       <div>Received frames: <span id="recvCount">0</span></div>
