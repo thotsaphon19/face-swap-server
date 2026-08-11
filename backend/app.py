@@ -1,9 +1,9 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Header, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
-import os, io, logging, asyncio, json
+import os, io, logging, asyncio, json, uuid, time, socket
 from PIL import Image
 import numpy as np
-from typing import Optional
+from typing import Optional, Dict
 
 # optional torch import (lazy)
 try:
@@ -61,7 +61,64 @@ def tensor_to_pil(tensor):
 
 @app.get("/health")
 async def health():
-    return {"status":"ok", "device": DEVICE}
+    return {"status": "ok", "device": DEVICE}
+
+# ---------------------------------------------------------------------------
+# Session endpoints used by the Flutter mobile client
+# ---------------------------------------------------------------------------
+
+_sessions: Dict[str, dict] = {}
+
+
+@app.get("/v1/info")
+async def server_info():
+    """Return public server info (no auth required) so the Flutter app can
+    confirm connectivity and display server details on the home screen."""
+    try:
+        hostname = socket.gethostname()
+        host_ip = socket.gethostbyname(hostname)
+    except Exception:
+        hostname = "unknown"
+        host_ip = "unknown"
+    return {
+        "server": "face-swap-server",
+        "version": "0.1",
+        "device": DEVICE,
+        "hostname": hostname,
+        "ip": host_ip,
+    }
+
+
+@app.post("/v1/session")
+async def create_session(authorization: str | None = Header(None)):
+    """Create a new processing session.  Returns a session_id the client can
+    use to tag subsequent /v1/process_frame requests.
+    """
+    check_auth_header(authorization)
+    session_id = str(uuid.uuid4())
+    _sessions[session_id] = {"created_at": time.time(), "frames": 0}
+    logger.info("Session created: %s", session_id)
+    return {"session_id": session_id}
+
+
+@app.get("/v1/session/{session_id}")
+async def get_session(session_id: str, authorization: str | None = Header(None)):
+    """Look up an existing session."""
+    check_auth_header(authorization)
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session_id": session_id, **_sessions[session_id]}
+
+
+@app.delete("/v1/session/{session_id}")
+async def delete_session(session_id: str, authorization: str | None = Header(None)):
+    """Terminate a session (disconnect)."""
+    check_auth_header(authorization)
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    del _sessions[session_id]
+    logger.info("Session deleted: %s", session_id)
+    return {"deleted": True}
 
 def check_auth_header(auth_header: Optional[str]):
     if SECRET_TOKEN:
