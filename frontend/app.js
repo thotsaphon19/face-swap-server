@@ -40,7 +40,7 @@ function getApiBaseUrl() {
 
 function getAuthHeaders() {
   const token = tokenInput.value.trim();
-  return token ? { Authorization: `****** } : {};
+  return token ? { Authorization: 'Bearer ' + token } : {};
 }
 
 function setSession(record) {
