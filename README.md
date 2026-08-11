@@ -63,7 +63,7 @@ flutter build apk    # release APK
 ### Configure server URL
 1. Launch the app
 2. Tap the ⚙ (settings) icon in the top-right
-3. Enter `http://<server-ip>` (e.g. `http://168.144.110.89`)
+3. Enter `http://<server-ip>` (e.g. `http://<your-droplet-ip>`)
 4. Tap **Save & Connect**
 
 The app calls `GET /connect` to verify the server is reachable, then displays the connection status with animated concentric rings.
@@ -73,7 +73,7 @@ The app calls `GET /connect` to verify the server is reachable, then displays th
 ## Runpod GPU deployment
 
 ```bash
-ssh vifm1il96xlry4-64411f2f@ssh.runpod.io -i ~/.ssh/id_ed25519
+ssh <your-pod-id>@ssh.runpod.io -i ~/.ssh/id_ed25519
 
 cd /workspace
 git clone https://github.com/thotsaphon19/face-swap-server.git
@@ -94,7 +94,7 @@ curl http://127.0.0.1:8000/health
 ## DigitalOcean deployment
 
 ```bash
-ssh root@168.144.110.89
+ssh root@<your-droplet-ip>
 
 apt update && apt install -y git curl
 curl -fsSL https://get.docker.com | sh

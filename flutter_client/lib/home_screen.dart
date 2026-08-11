@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'settings_screen.dart';
 
-enum ConnectionState { searching, connected, failed }
+enum ServerConnectionState { searching, connected, failed }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,7 +15,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
-  ConnectionState _connState = ConnectionState.searching;
+  ServerConnectionState _connState = ServerConnectionState.searching;
   String _statusText = 'กำลังหา Face Swap Server...';
   String _backendUrl = '';
   late AnimationController _pulseController;
@@ -43,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen>
     final url = prefs.getString('backend_url') ?? '';
     setState(() {
       _backendUrl = url;
-      _connState = ConnectionState.searching;
+      _connState = ServerConnectionState.searching;
       _statusText = 'กำลังหา Face Swap Server...';
     });
     _startSearch();
@@ -53,21 +53,21 @@ class _HomeScreenState extends State<HomeScreen>
     _searchTimer?.cancel();
     _doConnect();
     _searchTimer = Timer.periodic(const Duration(seconds: 8), (_) {
-      if (_connState != ConnectionState.connected) _doConnect();
+      if (_connState != ServerConnectionState.connected) _doConnect();
     });
   }
 
   Future<void> _doConnect() async {
     if (_backendUrl.isEmpty) {
       setState(() {
-        _connState = ConnectionState.failed;
+        _connState = ServerConnectionState.failed;
         _statusText = 'ยังไม่ได้ตั้ง Backend URL\nกดไอคอนเฟืองเพื่อตั้งค่า';
       });
       return;
     }
 
     setState(() {
-      _connState = ConnectionState.searching;
+      _connState = ServerConnectionState.searching;
       _statusText = 'กำลังเชื่อมต่อ $_backendUrl ...';
     });
 
@@ -78,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen>
           .timeout(const Duration(seconds: 6));
       if (response.statusCode == 200) {
         setState(() {
-          _connState = ConnectionState.connected;
+          _connState = ServerConnectionState.connected;
           _statusText = 'เชื่อมต่อสำเร็จ\n$_backendUrl';
         });
         _searchTimer?.cancel();
@@ -92,7 +92,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _setFailed() {
     setState(() {
-      _connState = ConnectionState.failed;
+      _connState = ServerConnectionState.failed;
       _statusText = 'ไม่พบ Server\nตรวจสอบ URL หรือกด Refresh';
     });
   }
@@ -142,11 +142,11 @@ class _HomeScreenState extends State<HomeScreen>
 
   Color get _ringColor {
     switch (_connState) {
-      case ConnectionState.connected:
+      case ServerConnectionState.connected:
         return const Color(0xFF42A5F5);
-      case ConnectionState.failed:
+      case ServerConnectionState.failed:
         return const Color(0xFFEF5350);
-      case ConnectionState.searching:
+      case ServerConnectionState.searching:
         return const Color(0xFF1565C0);
     }
   }
@@ -213,7 +213,7 @@ class _ConcentricRingsWidget extends StatelessWidget {
 
   final AnimationController pulseController;
   final Color ringColor;
-  final ConnectionState connState;
+  final ServerConnectionState connState;
 
   @override
   Widget build(BuildContext context) {
@@ -231,7 +231,7 @@ class _ConcentricRingsWidget extends StatelessWidget {
                 _Ring(
                   radius: 50.0 + i * 40,
                   color: ringColor.withOpacity(
-                    connState == ConnectionState.searching
+                    connState == ServerConnectionState.searching
                         ? (0.15 + 0.1 * ((t + i * 0.3) % 1.0))
                         : 0.18,
                   ),
@@ -245,9 +245,9 @@ class _ConcentricRingsWidget extends StatelessWidget {
                   border: Border.all(color: ringColor, width: 2),
                 ),
                 child: Icon(
-                  connState == ConnectionState.connected
+                  connState == ServerConnectionState.connected
                       ? Icons.check
-                      : connState == ConnectionState.failed
+                      : connState == ServerConnectionState.failed
                           ? Icons.close
                           : Icons.phone_android,
                   color: ringColor,
