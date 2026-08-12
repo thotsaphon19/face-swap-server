@@ -1,39 +1,43 @@
-version: "3.8"
 services:
-  web:
+  control-plane:
     build:
       context: .
       dockerfile: Dockerfile
-    image: faceswap/web:latest
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: control-plane
+      ENABLE_NGINX: "true"
+      WORKER_PORT: 8000
+      UVICORN_WORKERS: 1
     ports:
       - "80:80"
-      - "8000:8000"  # uvicorn container port (if needed)
-    environment:
-      - SECRET_TOKEN=${SECRET_TOKEN:-changeme}
-      - WORKER_PORT=8000
-      - MODEL_DIR=/workspace/model/checkpoints
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
     volumes:
-      - ./model:/workspace/model  # optional local model mount
-      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./model:/workspace/model
     restart: unless-stopped
-
-  # GPU service – run on Runpod or any host with NVIDIA Docker runtime.
-  # Start with: docker compose --profile gpu up -d gpu_worker
-  gpu_worker:
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+  gpu-worker:
     build:
       context: .
       dockerfile: Dockerfile.gpu
-    image: faceswap/gpu:latest
-    profiles: ["gpu"]
-    ports:
-      - "8001:8000"
+    profiles:
+      - local-gpu
+    env_file:
+      - .env
     environment:
-      - SECRET_TOKEN=${SECRET_TOKEN:-changeme}
-      - MODEL_DIR=/workspace/model/checkpoints
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      APP_ROLE: inference
+      ENABLE_NGINX: "false"
+      WORKER_PORT: 8000
+      UVICORN_WORKERS: 1
+    expose:
+      - "8000"
     volumes:
       - ./model:/workspace/model
+    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -41,5 +45,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: unless-stopped
-

@@ -1,138 +1,98 @@
 # face-swap-server — MVP Camera-Streaming + Face-Swap System
 
-> ⚠️ **ตรวจสอบก่อนใช้งานจริง**: ไฟล์นี้รวมเนื้อหาจาก 2 branch ที่มีรายละเอียดขัดแย้งกัน กรุณาเช็ค 2 จุดนี้กับโค้ดจริงก่อน commit:
-> 1. Backend มี endpoint `/connect` และ `/session` จริงหรือไม่ (ดูใน `backend/app.py`)
-> 2. มีไฟล์ `deploy/runpod_setup.sh` และ `deploy/digitalocean_setup.sh` จริงหรือไม่
+Production-leaning MVP deploy setup for a mobile client → control plane/API → GPU inference flow.
 
-## Overview
+## What is included
 
-This repository implements a mobile-to-server camera-streaming and face-swap system:
+- **FastAPI backend** with:
+  - `GET /health`
+  - `GET /v1/client-config`
+  - `POST /v1/sessions`
+  - `GET /v1/sessions/{session_id}`
+  - `POST /v1/sessions/{session_id}/start`
+  - `POST /v1/sessions/{session_id}/stop`
+  - `POST /v1/process_frame`
+  - `WS /ws`
+- **Flutter mobile client** in `flutter_client/` (Android/iOS) — mirrors the contract below
+- **PWA reference client** in `frontend/` showing the same contract the Flutter app uses
+- **CPU Docker image** for the control plane
+- **GPU Docker image** for local GPU or Runpod inference workers
+- **docker-compose.yml** for:
+  - local CPU-only smoke testing
+  - local GPU worker profile
+  - final single-machine deployment
+- **Nginx reverse proxy** built into the control-plane container
+- **Bootstrap script**: `deploy/bootstrap.sh`
 
-```
-[Flutter App (Android/iOS)]
-          │ WebSocket binary frames (JPEG)
-          ▼
-[FastAPI Backend] ──▶ Face-Swap Model (GPU / CPU)
-          │ processed JPEG frames
-          ▼
-[Flutter App displays swapped face]
-```
+The repository still uses a dummy inference model by default. Replace `load_model()` in `backend/app.py` with the real face-swap model load/inference path when ready.
 
-### Repository structure
+## Architecture
+
+### Fastest path before August 12
+
+1. **Flutter/mobile app** (`flutter_client/`) captures JPEG frames and authenticates with `SECRET_TOKEN`
+2. **DigitalOcean control plane** hosts:
+   - static frontend/PWA
+   - session + control endpoints
+   - websocket ingress
+   - HTTP frame ingress
+3. **Runpod GPU worker** receives proxied `/v1/process_frame` and `/ws` traffic
+4. **Processed JPEG output** returns to the mobile client
+
+### Final single-machine path
+
+Use the same compose stack with the `local-gpu` profile:
+
+- `control-plane` container serves Nginx + FastAPI
+- `gpu-worker` container runs the CUDA/PyTorch worker locally
+- set `RUNPOD_BASE_URL=http://gpu-worker:8000`
+
+That gives the same control-plane flow you test on DigitalOcean + Runpod, but collapsed onto one RTX 5060 server.
+
+## Repository structure
 
 | Path | Purpose |
 |------|---------|
-| `backend/app.py` | FastAPI backend — HTTP REST + WebSocket binary frame handler |
-| `frontend/` | PWA web client (existing, preserved) |
-| `flutter_client/` | Flutter mobile app for Android / iOS |
-| `deploy/` | Nginx config, Runpod & DigitalOcean setup scripts |
-| `Dockerfile` | CPU production image |
-| `Dockerfile.gpu` | GPU production image (CUDA) |
-| `docker-compose.yml` | Docker Compose with optional `gpu` profile |
+| `backend/app.py` | FastAPI backend — session API, HTTP REST + WebSocket binary frame handler |
+| `frontend/` | PWA reference web client |
+| `flutter_client/` | Flutter mobile app for Android / iOS (package: `face_swap_client`) |
+| `deploy/` | Nginx config + `bootstrap.sh` setup script |
+| `Dockerfile` | CPU production image (control plane) |
+| `Dockerfile.gpu` | GPU production image (CUDA, inference worker) |
+| `docker-compose.yml` | Docker Compose with `local-gpu` profile |
 
----
+## Environment variables
 
-## 1 · Quick Start (local / Docker Compose)
+Copy `.env.example` to `.env` and update:
 
-```bash
-# 1. Copy and edit environment
-cp .env.example .env
-# Edit SECRET_TOKEN, RUNPOD_URL if needed
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `APP_ROLE` | yes | `control-plane` or `inference` |
+| `ENABLE_NGINX` | yes | `true` for public ingress container, `false` for worker-only |
+| `PUBLIC_BASE_URL` | yes | Public base URL used in generated session/client URLs |
+| `SECRET_TOKEN` | yes | ****** for clients |
+| `RUNPOD_SECRET_TOKEN` | yes | Token used between control plane and GPU worker |
+| `RUNPOD_BASE_URL` | no | Empty for local CPU test, Runpod URL or `http://gpu-worker:8000` otherwise |
+| `MODEL_DIR` | yes | Where models are mounted |
+| `REQUEST_TIMEOUT_SECONDS` | yes | Timeout when proxying to Runpod |
+| `SESSION_TTL_SECONDS` | yes | In-memory session lifetime |
+| `MAX_IMAGE_BYTES` | yes | Upload/frame size guard |
+| `CORS_ORIGINS` | yes | Comma-separated allowed origins |
 
-# 2. Build & run (CPU mode)
-docker compose up -d --build
+## Flutter/mobile client
 
-# 3. Open PWA: http://localhost
-# 4. Health check
-curl http://localhost/health
-curl http://localhost/connect
-```
-
-To run the GPU worker (requires NVIDIA Docker runtime):
-```bash
-docker compose --profile gpu up -d gpu_worker
-```
-
-### Notes
-- For real-time low-latency, WebRTC (aiortc/pion) is preferred instead of WebSocket frames. This repo uses a WebSocket binary frame approach for simplicity.
-- Replace the dummy model loader in `backend/app.py` (`load_model()`) with your real model loading & inference steps.
-
-### GitHub Actions image publishing
-- The `docker-image.yml` workflow publishes `latest` to Docker Hub (and/or `ghcr.io/thotsaphon19/face-swap-server:latest` — confirm which registry is actually configured).
-- Configure these repository secrets before running the workflow:
-  - `DOCKERHUB_USERNAME` : your Docker Hub username (namespace)
-  - `DOCKERHUB_TOKEN` : Docker Hub access token with push permission
-
----
-
-## 2 · Backend API
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/health` | No | Liveness check, returns device & model dir |
-| GET | `/connect` | No | Flutter client discovery; returns `status`, `ws_path`, `auth_required` *(verify this exists)* |
-| GET | `/session` | No | Model load status and device info *(verify this exists)* |
-| POST | `/v1/process_frame` | ****** | Upload JPEG → returns processed JPEG |
-| WS | `/ws?token=<token>` | Token in query | Binary JPEG frames in → processed JPEG bytes out |
-
-### `/connect` response example
-```json
-{
-  "status": "ready",
-  "device": "cpu",
-  "ws_path": "/ws",
-  "process_path": "/v1/process_frame",
-  "auth_required": true
-}
-```
-
-### WebSocket protocol
-- **Client → Server**: raw JPEG bytes
-- **Server → Client**: raw JPEG bytes (processed / face-swapped)
-- **Server → Client (error)**: JSON text `{"error": "..."}`
-
-### Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SECRET_TOKEN` | `testing123` | ****** for auth (`/v1/process_frame` and WebSocket) |
-| `WORKER_PORT` | `8000` | Port for uvicorn |
-| `MODEL_DIR` | `/workspace/model/checkpoints` | Path to model checkpoint files |
-| `LOG_LEVEL` | `info` | Python log level |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
-| `RUNPOD_URL` | *(unset)* | Runpod GPU endpoint (for control-plane proxy use, if applicable) |
-
----
-
-## 3 · Flutter App
-
-### Requirements
-- Flutter SDK ≥ 3.1 ([install guide](https://docs.flutter.dev/get-started/install))
-- Android SDK (for APK build)
-- Xcode 15+ (for iOS build)
-- A physical device (camera access required on real hardware)
+The Flutter app lives in `flutter_client/` (package name `face_swap_client`). It mirrors the contract below — the same one the reference PWA in `frontend/` uses.
 
 ### Build & Install APK (Android)
 
 ```bash
 cd flutter_client
-
-# 1. Install dependencies
 flutter pub get
-
-# 2. Connect Android device (USB, enable developer mode + USB debugging)
-#    OR start emulator: flutter emulators --launch <emulator_id>
-
-# 3. Run in debug mode
-flutter run
-
-# 4. Build release APK
-flutter build apk --release
+flutter run                    # debug, connected device / emulator
+flutter build apk --release    # release APK
 
 # APK location:
 # build/app/outputs/flutter-apk/app-release.apk
-
-# 5. Install on connected device
 flutter install
 ```
 
@@ -148,219 +108,278 @@ flutter build ios --release
 ### App usage
 1. Launch the app on your phone
 2. Tap the ⚙️ **Settings** icon
-3. Set **WebSocket URL** (e.g. `ws://192.168.1.100/ws` or `wss://your-domain.com/ws`) — or, if using `/connect` discovery, just enter `http://<server-ip>` and tap **Save & Connect**
-4. Set **Auth Token** (must match `SECRET_TOKEN` on server)
-5. Choose FPS (recommended: 8–15) and camera resolution
-6. Tap **Save & Reconnect Camera**
-7. Back on the main screen, tap **Connect Server**
-8. Tap **Start Stream** — local preview left, face-swap result right
+3. Set the server base URL (e.g. `http://<server-ip>` or `https://your-domain.com`)
+4. Set **Auth Token** (must match `SECRET_TOKEN` on the server)
+5. Tap **Save & Connect** — the app calls `GET /v1/client-config` to discover URLs, then creates a session via `POST /v1/sessions`
+6. Choose FPS (recommended: 6–10) and camera resolution
+7. Tap **Start Stream** — local preview left, face-swap result right
 
----
+### 1. Discover config
 
-## 4 · Deployment: Runpod GPU
+`GET /v1/client-config`
 
-> Best for GPU inference (face-swap model). Pair with DigitalOcean for the web/WS proxy.
+Example response:
 
-### Option A — using setup script (recommended if `deploy/runpod_setup.sh` exists)
-
-```bash
-# On a Runpod GPU pod (RTX 3090 / A5000 / A100):
-
-git clone https://github.com/thotsaphon19/face-swap-server.git /workspace/face-swap-server
-cd /workspace/face-swap-server
-
-SECRET_TOKEN=your_secret_token bash deploy/runpod_setup.sh
-
-# Upload model checkpoints
-# scp ./your_model.pth root@<pod-ip>:/workspace/model/checkpoints/
-
-curl http://localhost:8000/health
-# {"status":"ok","device":"cuda","model_dir":"/workspace/model/checkpoints"}
-
-# Expose via Runpod TCP proxy → port 8000
-```
-
-### Option B — manual build (if the setup script doesn't exist)
-
-```bash
-ssh <your-pod-id>@ssh.runpod.io -i ~/.ssh/id_ed25519
-
-cd /workspace
-git clone https://github.com/thotsaphon19/face-swap-server.git
-cd face-swap-server
-
-cp .env.example .env
-# Edit .env as needed
-
-docker build -f Dockerfile.gpu -t face-swap-gpu:latest .
-docker run -d --name face-swap-gpu --restart unless-stopped \
-  -p 8000:8000 --env-file .env face-swap-gpu:latest
-
-curl http://127.0.0.1:8000/health
-```
-
-**Flutter WS URL for Runpod:**
-```
-ws://<RUNPOD_PUBLIC_HOST>:<TCP_PORT>/ws?token=your_secret_token
-```
-
----
-
-## 5 · Deployment: DigitalOcean (CPU / Proxy)
-
-> Suitable for the web frontend + API proxy, or all-in-one CPU deployment for testing.
-
-### Minimum spec
-- Ubuntu 22.04, 2 vCPU, 4 GB RAM
-
-### Option A — using setup script (recommended if `deploy/digitalocean_setup.sh` exists)
-
-```bash
-git clone https://github.com/thotsaphon19/face-swap-server.git /opt/face-swap-server
-cd /opt/face-swap-server
-
-SECRET_TOKEN=your_secret_token bash deploy/digitalocean_setup.sh
-
-# (Optional) set DOMAIN for HTTPS
-DOMAIN=yourdomain.com SECRET_TOKEN=your_secret_token \
-    bash deploy/digitalocean_setup.sh
-
-curl http://<DROPLET_IP>/health
-curl http://<DROPLET_IP>/connect
-```
-
-### Option B — manual setup (if the setup script doesn't exist)
-
-```bash
-ssh root@<your-droplet-ip>
-
-apt update && apt install -y git curl
-curl -fsSL https://get.docker.com | sh
-
-cd /opt
-git clone https://github.com/thotsaphon19/face-swap-server.git
-cd face-swap-server
-
-cp .env.example .env
-# Edit .env: set SECRET_TOKEN (and optionally RUNPOD_URL)
-
-docker compose up -d --build
-curl http://localhost/health
-curl http://localhost/connect
-```
-
-Open firewall:
-```bash
-ufw allow OpenSSH
-ufw allow 80
-ufw allow 443
-ufw --force enable
-```
-
-**Flutter WS URL for DigitalOcean:**
-```
-ws://<DROPLET_IP>/ws?token=your_secret_token
-# or with HTTPS:
-wss://yourdomain.com/ws?token=your_secret_token
-```
-
----
-
-## 6 · Staged Deployment Architecture
-
-```
-Phase 1 (test):
-  [Flutter App] ──WS──▶ [DigitalOcean Nginx :443]
-                                  │ proxy_pass
-                                  ▼
-                         [Runpod uvicorn :8000]
-                                  │
-                                  ▼
-                         [GPU face-swap model]
-
-Phase 2 (consolidate):
-  [Flutter App] ──WS──▶ [Single Physical Server]
-                         (GPU + Nginx + uvicorn)
-```
-
-For Phase 1, configure DigitalOcean Nginx to reverse-proxy to the Runpod public URL:
-
-```nginx
-location ~ ^/(v1|ws|health|connect|session)$ {
-    proxy_pass http://<RUNPOD_HOST>:<TCP_PORT>;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+```json
+{
+  "role": "control-plane",
+  "http_process_url": "https://your-domain/v1/process_frame",
+  "session_create_url": "https://your-domain/v1/sessions",
+  "ws_url": "wss://your-domain/ws",
+  "requires_bearer_token": true,
+  "binary_frame_format": "jpeg-bytes",
+  "max_image_bytes": 5242880,
+  "session_ttl_seconds": 3600
 }
 ```
 
----
+### 2. Create + manage a session
 
-## 7 · Wiring in a Real Face-Swap Model
+`POST /v1/sessions` with `Authorization: ******`
 
-The dummy model in `backend/app.py` returns the original image unchanged. To use a real model:
+Example body:
 
-```python
-# backend/app.py — replace load_model():
-
-def load_model():
-    global _model
-    if _model is not None:
-        return _model
-    import torch
-    # Example: load a TorchScript or custom model
-    _model = torch.jit.load(os.path.join(MODEL_DIR, "faceswap.pt"), map_location=DEVICE)
-    _model.eval()
-    logger.info(f"Loaded real model from {MODEL_DIR} on {DEVICE}")
-    return _model
+```json
+{
+  "client_name": "flutter-app",
+  "transport": "ws",
+  "resolution": "640x480",
+  "fps": 8,
+  "metadata": {
+    "platform": "android"
+  }
+}
 ```
 
-Then update the inference call in `process_frame` / `websocket_endpoint` accordingly.
+Example response:
 
----
+```json
+{
+  "session_id": "f8d3...",
+  "status": "created",
+  "created_at": "2026-08-11T00:00:00Z",
+  "updated_at": "2026-08-11T00:00:00Z",
+  "expires_at": "2026-08-11T01:00:00Z",
+  "transport": "ws",
+  "client_name": "flutter-app",
+  "resolution": "640x480",
+  "fps": 8,
+  "ws_url": "wss://your-domain/ws?session_id=f8d3...",
+  "process_frame_url": "https://your-domain/v1/process_frame",
+  "stop_url": "https://your-domain/v1/sessions/f8d3.../stop",
+  "metadata": {
+    "platform": "android"
+  }
+}
+```
 
-## 8 · Smoke Test (End-to-End)
+Then call:
+
+- `POST /v1/sessions/{session_id}/start`
+- `POST /v1/sessions/{session_id}/stop`
+- `GET /v1/sessions/{session_id}`
+
+### 3. Send inference frames
+
+#### HTTP mode
+
+`POST /v1/process_frame`
+
+- Header: `Authorization: ******`
+- Optional header: `X-Session-Id: <session_id>`
+- Body: `multipart/form-data` with `file=<jpeg>`
+
+Success:
+
+- `200 OK`
+- `Content-Type: image/jpeg`
+- header `X-Process-Time-Ms`
+
+#### WebSocket mode
+
+Connect to the `ws_url` returned by the session API, then add the same client token as the `token` query parameter.
+
+- client → server: raw JPEG bytes
+- server → client: raw JPEG bytes
+- server → client on recoverable errors: JSON text such as `{"error":"Invalid image"}`
+
+## Local test environment
+
+### CPU-only smoke test
 
 ```bash
-# 1. Start server (local Docker or remote)
-docker compose up -d --build
-curl http://localhost/health          # → {"status":"ok",...}
-
-# 2. Test HTTP endpoint
-curl -X POST http://localhost/v1/process_frame \
-  -H "Authorization: ******" \
-  -F "file=@/path/to/test.jpg" \
-  --output result.jpg
-# result.jpg should be a valid JPEG
-
-# 3. Test WebSocket
-python3 - <<'PY'
-import asyncio, websockets, pathlib
-
-async def test():
-    url = "ws://localhost/ws?token=testing123"
-    async with websockets.connect(url) as ws:
-        data = pathlib.Path("/path/to/test.jpg").read_bytes()
-        await ws.send(data)
-        result = await ws.recv()
-        pathlib.Path("/tmp/ws_result.jpg").write_bytes(result)
-        print(f"Received {len(result)} bytes")
-
-asyncio.run(test())
-PY
-
-# 4. Install Flutter APK and verify live streaming works end-to-end
+cp .env.example .env
+./deploy/bootstrap.sh
 ```
 
----
+Then open `http://localhost/`.
 
-## 9 · Notes & Recommendations
+Recommended local `.env` values:
 
-- **Latency**: WebSocket JPEG approach adds ~30–100 ms roundtrip on LAN. For sub-30 ms,
-  consider replacing with WebRTC (aiortc on server).
-- **Frame drop**: The Flutter app uses a "one frame at a time" strategy — it waits for the
-  previous frame result before sending the next, preventing queue buildup.
-- **Face-swap quality**: For smooth transitions add temporal smoothing in the model pipeline
-  (blend previous output with current).
-- **Security**: Change `SECRET_TOKEN` before any public deployment.
-- **HTTPS**: Required on iOS for WebSocket (`wss://`). Set up via `DOMAIN=` in the DO script.
+```env
+PUBLIC_BASE_URL=http://localhost
+SECRET_TOKEN=testing123
+RUNPOD_SECRET_TOKEN=testing123
+RUNPOD_BASE_URL=
+```
+
+This runs local dummy inference inside the control-plane container, so it works even without a GPU.
+
+### Local GPU worker test
+
+Use this when you want to test the split control-plane → GPU-worker path on one machine.
+
+```env
+PUBLIC_BASE_URL=http://localhost
+SECRET_TOKEN=testing123
+RUNPOD_SECRET_TOKEN=testing123
+RUNPOD_BASE_URL=http://gpu-worker:8000
+```
+
+Start:
+
+```bash
+./deploy/bootstrap.sh local-gpu
+```
+
+## DigitalOcean deployment
+
+Use the CPU image/container as the public entrypoint.
+
+### 1. Provision the droplet
+
+- Ubuntu 22.04+
+- Open ports `80` and `443`
+- Install Docker Engine + Compose plugin
+
+### 2. Copy project and env file
+
+```bash
+scp -r . root@YOUR_DROPLET_IP:/opt/face-swap-server
+ssh root@YOUR_DROPLET_IP
+cd /opt/face-swap-server
+cp .env.example .env
+```
+
+Set at minimum:
+
+```env
+PUBLIC_BASE_URL=https://api.your-domain.com
+SECRET_TOKEN=<strong-public-token>
+RUNPOD_SECRET_TOKEN=<strong-internal-token>
+RUNPOD_BASE_URL=https://YOUR_RUNPOD_ENDPOINT
+```
+
+### 3. Start the control plane
+
+```bash
+docker compose up -d --build control-plane
+```
+
+### 4. Put TLS in front
+
+Use your existing preferred TLS layer:
+
+- DigitalOcean Load Balancer
+- Caddy
+- Nginx + certbot
+
+This repo only provides the app-side Nginx config on port `80`, so TLS termination can stay outside the container.
+
+## Runpod GPU deployment
+
+Use `Dockerfile.gpu` for the worker image.
+
+### 1. Build and push
+
+```bash
+docker build -f Dockerfile.gpu -t ghcr.io/YOUR_ORG/face-swap-server:gpu-latest .
+docker push ghcr.io/YOUR_ORG/face-swap-server:gpu-latest
+```
+
+### 2. Create the Runpod pod
+
+Set environment variables:
+
+```env
+APP_ROLE=inference
+ENABLE_NGINX=false
+WORKER_PORT=8000
+SECRET_TOKEN=<same as RUNPOD_SECRET_TOKEN on DigitalOcean>
+RUNPOD_SECRET_TOKEN=<same value>
+MODEL_DIR=/workspace/model/checkpoints
+LOG_LEVEL=INFO
+PUBLIC_BASE_URL=https://YOUR_RUNPOD_ENDPOINT
+```
+
+Mount or upload your model files into:
+
+```text
+/workspace/model/checkpoints
+```
+
+Expose container port `8000`.
+
+### 3. Smoke test the pod
+
+```bash
+curl http://YOUR_RUNPOD_ENDPOINT/health
+```
+
+Expected output includes:
+
+```json
+{
+  "status": "ok",
+  "role": "inference"
+}
+```
+
+## Final single-machine RTX 5060 deployment
+
+On the real server:
+
+1. Install Docker + Compose
+2. Copy the repo
+3. Put the real models under `./model/checkpoints`
+4. Set:
+
+```env
+PUBLIC_BASE_URL=https://faceswap.your-domain.com
+SECRET_TOKEN=<strong-public-token>
+RUNPOD_SECRET_TOKEN=<same-or-separate-internal-token>
+RUNPOD_BASE_URL=http://gpu-worker:8000
+```
+
+5. Start:
+
+```bash
+cd /opt/face-swap-server
+./deploy/bootstrap.sh local-gpu
+```
+
+This reproduces the same split architecture locally, so the migration from DigitalOcean + Runpod is just an env/config change.
+
+## Operational notes
+
+- **Auth**: change both tokens before public testing
+- **Uploads**: default max frame size is 5 MB
+- **Latency**: start at `320x240` or `640x480` and `6-10 fps`
+- **Session storage**: in-memory only for now; restart clears sessions
+- **Inference**: replace the dummy model with the real face-swap pipeline before public rollout
+- **Frame drop**: prefer a "one frame at a time" client strategy — wait for the previous frame result before sending the next, to avoid queue buildup
+- **HTTPS**: required on iOS for WebSocket (`wss://`) — terminate TLS in front of the control plane (see DigitalOcean deployment section)
+
+## Useful commands
+
+```bash
+# Validate compose
+docker compose config
+
+# Follow logs
+docker compose logs -f control-plane
+docker compose logs -f gpu-worker
+
+# Stop everything
+docker compose down
+```

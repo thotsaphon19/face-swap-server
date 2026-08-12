@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /app/backend
+export PYTHONPATH="/app/backend:${PYTHONPATH:-}"
 
-if [ ! -d .venv ]; then
-  python3 -m venv .venv
-  . .venv/bin/activate
-  pip install --upgrade pip setuptools wheel
-  pip install -r requirements.txt || true
-else
-  . .venv/bin/activate
+if [[ "${ENABLE_NGINX:-true}" == "true" ]]; then
+  uvicorn app:app --app-dir /app/backend --host 127.0.0.1 --port "${WORKER_PORT:-8000}" --workers "${UVICORN_WORKERS:-1}" &
+  exec nginx -g "daemon off;"
 fi
 
-nohup ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --workers 1 > /app/uvicorn.log 2>&1 &
-
-nginx -g "daemon off;"
+exec uvicorn app:app --app-dir /app/backend --host 0.0.0.0 --port "${WORKER_PORT:-8000}" --workers "${UVICORN_WORKERS:-1}"
