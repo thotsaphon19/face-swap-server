@@ -1,15 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Release (and default) network security config.
-  - Disables all cleartext (HTTP/WS) traffic for production security.
-  - Trusts only system CAs in production.
-  - The debug-overrides block additionally trusts user-installed CAs when
-    running a debug build, but does NOT enable cleartext — that is handled
-    by the separate src/debug/res/xml/network_security_config.xml which
-    overrides this file entirely in debug builds.
+  - Allows cleartext (HTTP/WS) traffic for LAN streaming use cases.
+  - Trusts only system CAs in production (plus user CAs in debug overrides).
+  - The debug-overrides block additionally trusts user-installed CAs.
+  - Debug builds still override this file via src/debug/res/xml/network_security_config.xml.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false">
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

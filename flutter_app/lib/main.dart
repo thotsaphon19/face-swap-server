@@ -91,6 +91,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
   bool _wsConnected = false;
   bool _streaming = false;
   bool _pendingFrame = false;
+  DateTime? _lastFrameSentAt;
 
   // ── Result image ─────────────────────────────────────────────────────────
   Uint8List? _resultBytes;
@@ -228,6 +229,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
   // ── Streaming loop ────────────────────────────────────────────────────
   void _startStream() {
     if (_ws == null || !_cameraReady || _controller == null) return;
+    if (_controller!.value.isStreamingImages) return;
     setState(() {
       _streaming = true;
       _pendingFrame = false;
@@ -236,10 +238,17 @@ class _CameraStreamPageState extends State<CameraStreamPage>
     _controller!.startImageStream((CameraImage image) {
       if (!_streaming) return;
       if (_pendingFrame || !_wsConnected) return;
+      final now = DateTime.now();
+      final minIntervalMs = (1000 / (_fps <= 0 ? 1 : _fps)).round();
+      if (_lastFrameSentAt != null &&
+          now.difference(_lastFrameSentAt!).inMilliseconds < minIntervalMs) {
+        return;
+      }
       final Uint8List? jpegBytes = _extractJpeg(image);
       if (jpegBytes == null) return;
       _ws?.sendBytes(jpegBytes);
-      _lastSentAt = DateTime.now();
+      _lastSentAt = now;
+      _lastFrameSentAt = now;
       setState(() {
         _pendingFrame = true;
         _sentFrames++;
@@ -256,6 +265,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
     setState(() {
       _streaming = false;
       _pendingFrame = false;
+      _lastFrameSentAt = null;
     });
     try {
       _controller?.stopImageStream();

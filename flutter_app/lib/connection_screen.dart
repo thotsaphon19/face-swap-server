@@ -24,8 +24,10 @@ class ConnectionScreen extends StatefulWidget {
 enum _ConnState { idle, connecting, connected, failed }
 
 class _ConnectionScreenState extends State<ConnectionScreen> {
+  static const String _defaultServerUrl = 'http://192.168.1.100:8000';
   final _urlCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
+  Timer? _retryTimer;
 
   _ConnState _state = _ConnState.idle;
   String _errorMsg = '';
@@ -38,6 +40,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   @override
   void dispose() {
+    _retryTimer?.cancel();
     _urlCtrl.dispose();
     _tokenCtrl.dispose();
     super.dispose();
@@ -45,13 +48,14 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   Future<void> _loadAndAutoConnect() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedUrl = prefs.getString('serverUrl') ?? '';
+    final savedUrl = prefs.getString('serverUrl');
     final savedToken = prefs.getString('token') ?? '';
-    _urlCtrl.text = savedUrl;
+    _urlCtrl.text =
+        (savedUrl != null && savedUrl.isNotEmpty) ? savedUrl : _defaultServerUrl;
     _tokenCtrl.text = savedToken;
 
-    if (savedUrl.isNotEmpty) {
-      await _connect(savedUrl, savedToken);
+    if (savedUrl != null && savedUrl.isNotEmpty) {
+      await _connect(savedUrl, savedToken, autoRetry: true);
     }
   }
 
@@ -81,8 +85,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     return '$base/health';
   }
 
-  Future<void> _connect(String rawUrl, String token) async {
+  Future<void> _connect(
+    String rawUrl,
+    String token, {
+    bool autoRetry = false,
+  }) async {
     if (!mounted) return;
+    _retryTimer?.cancel();
     setState(() {
       _state = _ConnState.connecting;
       _errorMsg = '';
@@ -102,6 +111,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
         await prefs.setString('serverUrl', rawUrl.trim());
         await prefs.setString('token', token.trim());
         setState(() => _state = _ConnState.connected);
+        _retryTimer?.cancel();
         await Future.delayed(const Duration(milliseconds: 600));
         if (mounted) widget.onConnected(_toWsUrl(rawUrl), token.trim());
       } else {
@@ -109,6 +119,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           _state = _ConnState.failed;
           _errorMsg = 'Server returned HTTP ${response.statusCode}';
         });
+        _scheduleRetry(autoRetry, rawUrl, token);
       }
     } on TimeoutException {
       if (mounted) {
@@ -116,6 +127,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           _state = _ConnState.failed;
           _errorMsg = 'Connection timed out. Check the server URL.';
         });
+        _scheduleRetry(autoRetry, rawUrl, token);
       }
     } catch (e) {
       if (mounted) {
@@ -123,8 +135,19 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
           _state = _ConnState.failed;
           _errorMsg = 'Cannot reach server: $e';
         });
+        _scheduleRetry(autoRetry, rawUrl, token);
       }
     }
+  }
+
+  void _scheduleRetry(bool autoRetry, String url, String token) {
+    if (!autoRetry || !mounted) return;
+    _retryTimer?.cancel();
+    _retryTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) {
+        _connect(url, token, autoRetry: true);
+      }
+    });
   }
 
   void _onConnectPressed() {
@@ -136,7 +159,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       });
       return;
     }
-    _connect(url, _tokenCtrl.text.trim());
+    _connect(url, _tokenCtrl.text.trim(), autoRetry: true);
   }
 
   @override
