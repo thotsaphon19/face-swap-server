@@ -1,4 +1,4 @@
-# face-swap-server
+# face-swap-server — MVP Camera-Streaming + Face-Swap System
 
 Production-leaning MVP deploy setup for a mobile client → control plane/API → GPU inference flow.
 
@@ -13,7 +13,8 @@ Production-leaning MVP deploy setup for a mobile client → control plane/API �
   - `POST /v1/sessions/{session_id}/stop`
   - `POST /v1/process_frame`
   - `WS /ws`
-- **PWA reference client** in `frontend/` showing the same contract a Flutter app should use
+- **Flutter mobile client** in `flutter_client/` (Android/iOS) — mirrors the contract below
+- **PWA reference client** in `frontend/` showing the same contract the Flutter app uses
 - **CPU Docker image** for the control plane
 - **GPU Docker image** for local GPU or Runpod inference workers
 - **docker-compose.yml** for:
@@ -23,13 +24,13 @@ Production-leaning MVP deploy setup for a mobile client → control plane/API �
 - **Nginx reverse proxy** built into the control-plane container
 - **Bootstrap script**: `deploy/bootstrap.sh`
 
-The repository still uses a dummy inference model by default. Replace `load_model()` in `/home/runner/work/face-swap-server/face-swap-server/backend/app.py` with the real face-swap model load/inference path when ready.
+The repository still uses a dummy inference model by default. Replace `load_model()` in `backend/app.py` with the real face-swap model load/inference path when ready.
 
 ## Architecture
 
 ### Fastest path before August 12
 
-1. **Flutter/mobile app** captures JPEG frames and authenticates with `SECRET_TOKEN`
+1. **Flutter/mobile app** (`flutter_client/`) captures JPEG frames and authenticates with `SECRET_TOKEN`
 2. **DigitalOcean control plane** hosts:
    - static frontend/PWA
    - session + control endpoints
@@ -47,6 +48,18 @@ Use the same compose stack with the `local-gpu` profile:
 - set `RUNPOD_BASE_URL=http://gpu-worker:8000`
 
 That gives the same control-plane flow you test on DigitalOcean + Runpod, but collapsed onto one RTX 5060 server.
+
+## Repository structure
+
+| Path | Purpose |
+|------|---------|
+| `backend/app.py` | FastAPI backend — session API, HTTP REST + WebSocket binary frame handler |
+| `frontend/` | PWA reference web client |
+| `flutter_client/` | Flutter mobile app for Android / iOS (package: `face_swap_client`) |
+| `deploy/` | Nginx config + `bootstrap.sh` setup script |
+| `Dockerfile` | CPU production image (control plane) |
+| `Dockerfile.gpu` | GPU production image (CUDA, inference worker) |
+| `docker-compose.yml` | Docker Compose with `local-gpu` profile |
 
 ## Environment variables
 
@@ -66,9 +79,40 @@ Copy `.env.example` to `.env` and update:
 | `MAX_IMAGE_BYTES` | yes | Upload/frame size guard |
 | `CORS_ORIGINS` | yes | Comma-separated allowed origins |
 
-## Flutter/mobile client contract
+## Flutter/mobile client
 
-This repo does **not** include a full Flutter app yet. It now exposes a stable contract and a working browser client that Flutter can mirror directly.
+The Flutter app lives in `flutter_client/` (package name `face_swap_client`). It mirrors the contract below — the same one the reference PWA in `frontend/` uses.
+
+### Build & Install APK (Android)
+
+```bash
+cd flutter_client
+flutter pub get
+flutter run                    # debug, connected device / emulator
+flutter build apk --release    # release APK
+
+# APK location:
+# build/app/outputs/flutter-apk/app-release.apk
+flutter install
+```
+
+### Build for iOS
+
+```bash
+cd flutter_client
+flutter pub get
+open ios/Runner.xcworkspace   # set signing in Xcode
+flutter build ios --release
+```
+
+### App usage
+1. Launch the app on your phone
+2. Tap the ⚙️ **Settings** icon
+3. Set the server base URL (e.g. `http://<server-ip>` or `https://your-domain.com`)
+4. Set **Auth Token** (must match `SECRET_TOKEN` on the server)
+5. Tap **Save & Connect** — the app calls `GET /v1/client-config` to discover URLs, then creates a session via `POST /v1/sessions`
+6. Choose FPS (recommended: 6–10) and camera resolution
+7. Tap **Start Stream** — local preview left, face-swap result right
 
 ### 1. Discover config
 
@@ -164,7 +208,6 @@ Connect to the `ws_url` returned by the session API, then add the same client to
 ### CPU-only smoke test
 
 ```bash
-cd /home/runner/work/face-swap-server/face-swap-server
 cp .env.example .env
 ./deploy/bootstrap.sh
 ```
@@ -196,7 +239,6 @@ RUNPOD_BASE_URL=http://gpu-worker:8000
 Start:
 
 ```bash
-cd /home/runner/work/face-swap-server/face-swap-server
 ./deploy/bootstrap.sh local-gpu
 ```
 
@@ -213,7 +255,7 @@ Use the CPU image/container as the public entrypoint.
 ### 2. Copy project and env file
 
 ```bash
-scp -r /home/runner/work/face-swap-server/face-swap-server root@YOUR_DROPLET_IP:/opt/face-swap-server
+scp -r . root@YOUR_DROPLET_IP:/opt/face-swap-server
 ssh root@YOUR_DROPLET_IP
 cd /opt/face-swap-server
 cp .env.example .env
@@ -250,10 +292,7 @@ Use `Dockerfile.gpu` for the worker image.
 
 ### 1. Build and push
 
-Example:
-
 ```bash
-cd /home/runner/work/face-swap-server/face-swap-server
 docker build -f Dockerfile.gpu -t ghcr.io/YOUR_ORG/face-swap-server:gpu-latest .
 docker push ghcr.io/YOUR_ORG/face-swap-server:gpu-latest
 ```
@@ -328,6 +367,8 @@ This reproduces the same split architecture locally, so the migration from Digit
 - **Latency**: start at `320x240` or `640x480` and `6-10 fps`
 - **Session storage**: in-memory only for now; restart clears sessions
 - **Inference**: replace the dummy model with the real face-swap pipeline before public rollout
+- **Frame drop**: prefer a "one frame at a time" client strategy — wait for the previous frame result before sending the next, to avoid queue buildup
+- **HTTPS**: required on iOS for WebSocket (`wss://`) — terminate TLS in front of the control plane (see DigitalOcean deployment section)
 
 ## Useful commands
 

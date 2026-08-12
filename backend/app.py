@@ -35,6 +35,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", "/workspace/model/checkpoints")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600"))
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))
+# Comma-separated list of allowed CORS origins; use * to allow all
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
 DEVICE = "cuda" if torch and torch.cuda.is_available() else "cpu"
 
@@ -42,10 +43,14 @@ logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger("face-swap-server")
 
 app = FastAPI(title="face-swap-server", version="0.2.0")
+
+# Allow requests from Flutter app (and web PWA).
+# When CORS_ORIGINS is "*", credentials must be disabled (CORS spec requirement).
+_cors_wildcard = CORS_ORIGINS == ["*"] or not CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],
-    allow_credentials=False,
+    allow_credentials=not _cors_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
