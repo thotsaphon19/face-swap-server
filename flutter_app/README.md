@@ -4,7 +4,7 @@ Primary mobile camera client for face-swap streaming (connection-first flow).
 
 ## Open in VS Code
 
-1. Open folder: `/home/runner/work/face-swap-server/face-swap-server/flutter_app`
+1. Open folder: `<repo-root>/flutter_app`
 2. Run:
    ```bash
    flutter pub get
@@ -21,7 +21,8 @@ Notes:
 - First launch opens a server connection screen.  
   Default URL shown: `http://192.168.1.100:8000`
 - Camera starts only after server connection succeeds.
-- Release build allows LAN HTTP/WS connections for local face-swap servers.
+- Debug build allows LAN HTTP/WS connections for local face-swap servers.
+- Release build keeps cleartext blocked; use HTTPS/WSS server URLs.
 
 ## Runtime flow
 

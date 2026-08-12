@@ -159,7 +159,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       });
       return;
     }
-    _connect(url, _tokenCtrl.text.trim(), autoRetry: true);
+    _connect(url, _tokenCtrl.text.trim(), autoRetry: false);
   }
 
   @override

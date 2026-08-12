@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Release (and default) network security config.
-  - Allows cleartext (HTTP/WS) traffic for LAN streaming use cases.
+  - Keeps release builds secure by disallowing cleartext (HTTP/WS) traffic.
   - Trusts only system CAs in production (plus user CAs in debug overrides).
-  - The debug-overrides block additionally trusts user-installed CAs.
-  - Debug builds still override this file via src/debug/res/xml/network_security_config.xml.
+  - Debug builds override this file via src/debug/res/xml/network_security_config.xml
+    to allow local HTTP/WS testing.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
