@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import 'connection_screen.dart';
 import 'ws_service.dart';
 
 void main() async {
@@ -22,6 +23,7 @@ class FaceSwapApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'FaceSwap Cam',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF0A84FF),
@@ -29,14 +31,49 @@ class FaceSwapApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: CameraStreamPage(cameras: cameras),
+      // Show connection screen first; navigate to camera stream after connect.
+      home: _Root(cameras: cameras),
     );
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Root widget that wires ConnectionScreen → CameraStreamPage navigation.
+// ─────────────────────────────────────────────────────────────────────────────
+class _Root extends StatelessWidget {
+  final List<CameraDescription> cameras;
+  const _Root({required this.cameras});
+
+  @override
+  Widget build(BuildContext context) {
+    return ConnectionScreen(
+      onConnected: (wsUrl, token) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => CameraStreamPage(
+              cameras: cameras,
+              wsUrl: wsUrl,
+              token: token,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 class CameraStreamPage extends StatefulWidget {
   final List<CameraDescription> cameras;
-  const CameraStreamPage({super.key, required this.cameras});
+  final String wsUrl;
+  final String token;
+  const CameraStreamPage({
+    super.key,
+    required this.cameras,
+    required this.wsUrl,
+    required this.token,
+  });
 
   @override
   State<CameraStreamPage> createState() => _CameraStreamPageState();
@@ -51,6 +88,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
 
   // ── WS / streaming ──────────────────────────────────────────────────────
   WsService? _ws;
+  bool _wsConnected = false;
   bool _streaming = false;
   bool _pendingFrame = false;
 
@@ -63,33 +101,36 @@ class _CameraStreamPageState extends State<CameraStreamPage>
   double _latencyMs = 0;
   DateTime? _lastSentAt;
 
-  // ── Settings ─────────────────────────────────────────────────────────────
-  String _wsUrl = 'ws://YOUR_SERVER_IP/ws';
-  String _token = '';  // Set your server SECRET_TOKEN in Settings before connecting
+  // ── Settings (editable in-app) ────────────────────────────────────────────
+  late String _wsUrl;
+  late String _token;
   int _fps = 8;
   ResolutionPreset _resolution = ResolutionPreset.medium;
 
-  final TextEditingController _wsUrlCtrl = TextEditingController();
-  final TextEditingController _tokenCtrl = TextEditingController();
+  late final TextEditingController _wsUrlCtrl;
+  late final TextEditingController _tokenCtrl;
 
   // ─────────────────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
+    _wsUrl = widget.wsUrl;
+    _token = widget.token;
+    _wsUrlCtrl = TextEditingController(text: _wsUrl);
+    _tokenCtrl = TextEditingController(text: _token);
     WidgetsBinding.instance.addObserver(this);
-    _loadPrefs().then((_) => _startCamera());
+    _loadPrefs().then((_) {
+      _connectWs();
+      _startCamera();
+    });
     WakelockPlus.enable();
   }
 
   Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _wsUrl = prefs.getString('wsUrl') ?? _wsUrl;
-      _token = prefs.getString('token') ?? _token;
       _fps = prefs.getInt('fps') ?? _fps;
     });
-    _wsUrlCtrl.text = _wsUrl;
-    _tokenCtrl.text = _token;
   }
 
   Future<void> _savePrefs() async {
@@ -137,16 +178,17 @@ class _CameraStreamPageState extends State<CameraStreamPage>
 
   // ── WebSocket ─────────────────────────────────────────────────────────
   void _connectWs() {
-    if (_ws != null) {
-      _ws!.disconnect();
-      _ws = null;
-    }
+    _ws?.disconnect();
 
     final urlWithToken = _wsUrl.contains('?')
         ? '$_wsUrl&token=${Uri.encodeComponent(_token)}'
         : '$_wsUrl?token=${Uri.encodeComponent(_token)}';
 
-    final svc = WsService(url: urlWithToken);
+    final svc = WsService(
+      url: urlWithToken,
+      autoReconnect: true,
+      reconnectDelay: const Duration(seconds: 3),
+    );
     svc.onBinaryFrame = (bytes) {
       final now = DateTime.now();
       if (_lastSentAt != null) {
@@ -158,15 +200,29 @@ class _CameraStreamPageState extends State<CameraStreamPage>
         _pendingFrame = false;
       });
     };
-    svc.onError = (msg) => _showSnack('WS error: $msg');
+    svc.onError = (msg) => _showSnack('WS: $msg');
+    svc.onConnectionChange = (connected) {
+      if (!mounted) return;
+      setState(() => _wsConnected = connected);
+      if (!connected && _streaming) {
+        // Keep camera running; auto-reconnect will restore WS.
+        setState(() => _pendingFrame = false);
+      }
+    };
     svc.connect();
-    setState(() => _ws = svc);
+    setState(() {
+      _ws = svc;
+      _wsConnected = false;
+    });
   }
 
   void _disconnectWs() {
     _stopStream();
     _ws?.disconnect();
-    setState(() => _ws = null);
+    setState(() {
+      _ws = null;
+      _wsConnected = false;
+    });
   }
 
   // ── Streaming loop ────────────────────────────────────────────────────
@@ -178,8 +234,8 @@ class _CameraStreamPageState extends State<CameraStreamPage>
     });
 
     _controller!.startImageStream((CameraImage image) {
-      if (!_streaming || _pendingFrame) return;
-      // CameraImage with ImageFormatGroup.jpeg has JPEG bytes in plane[0]
+      if (!_streaming) return;
+      if (_pendingFrame || !_wsConnected) return;
       final Uint8List? jpegBytes = _extractJpeg(image);
       if (jpegBytes == null) return;
       _ws?.sendBytes(jpegBytes);
@@ -191,13 +247,9 @@ class _CameraStreamPageState extends State<CameraStreamPage>
     });
   }
 
-  /// Extract JPEG bytes from a [CameraImage].
-  /// When [ImageFormatGroup.jpeg] is set, plane 0 holds the full JPEG.
   Uint8List? _extractJpeg(CameraImage image) {
     if (image.planes.isEmpty) return null;
-    final plane = image.planes.first;
-    // plane.bytes is already JPEG when imageFormatGroup is jpeg
-    return Uint8List.fromList(plane.bytes);
+    return Uint8List.fromList(image.planes.first.bytes);
   }
 
   void _stopStream() {
@@ -207,9 +259,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
     });
     try {
       _controller?.stopImageStream();
-    } catch (_) {
-      // Ignore if stream was not active
-    }
+    } catch (_) {}
   }
 
   // ── Settings sheet ────────────────────────────────────────────────────
@@ -231,6 +281,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
           });
           await _savePrefs();
           if (mounted) Navigator.of(ctx).pop();
+          _connectWs();
           await _startCamera();
         },
       ),
@@ -264,6 +315,8 @@ class _CameraStreamPageState extends State<CameraStreamPage>
     _stopStream();
     _ws?.disconnect();
     _controller?.dispose();
+    _wsUrlCtrl.dispose();
+    _tokenCtrl.dispose();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -271,12 +324,34 @@ class _CameraStreamPageState extends State<CameraStreamPage>
   // ── Build ─────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final wsConnected = _ws?.isConnected ?? false;
-
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          tooltip: 'Disconnect',
+          onPressed: () {
+            _disconnectWs();
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => ConnectionScreen(
+                  onConnected: (wsUrl, token) {
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (_) => CameraStreamPage(
+                          cameras: widget.cameras,
+                          wsUrl: wsUrl,
+                          token: token,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            );
+          },
+        ),
         title: const Text('FaceSwap Cam',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         actions: [
@@ -288,12 +363,31 @@ class _CameraStreamPageState extends State<CameraStreamPage>
       ),
       body: Column(
         children: [
+          // ── Reconnecting banner ───────────────────────────────────────
+          if (!_wsConnected && _ws != null)
+            Container(
+              color: Colors.orange.shade900,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: const Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  ),
+                  SizedBox(width: 10),
+                  Text('Reconnecting to server…',
+                      style: TextStyle(color: Colors.white, fontSize: 13)),
+                ],
+              ),
+            ),
+
           // ── Dual preview ──────────────────────────────────────────────
           Expanded(
             flex: 5,
             child: Row(
               children: [
-                // Local camera
                 Expanded(
                   child: Container(
                     color: Colors.black,
@@ -326,7 +420,6 @@ class _CameraStreamPageState extends State<CameraStreamPage>
                     ),
                   ),
                 ),
-                // Face-swap result
                 Expanded(
                   child: Container(
                     color: const Color(0xFF111111),
@@ -364,8 +457,8 @@ class _CameraStreamPageState extends State<CameraStreamPage>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _statChip('WS', wsConnected ? '● ON' : '○ OFF',
-                    wsConnected ? Colors.greenAccent : Colors.redAccent),
+                _statChip('WS', _wsConnected ? '● ON' : '○ OFF',
+                    _wsConnected ? Colors.greenAccent : Colors.redAccent),
                 _statChip('Sent', '$_sentFrames', Colors.white70),
                 _statChip('Recv', '$_recvFrames', Colors.white70),
                 _statChip('RTT', '${_latencyMs.toInt()} ms', Colors.white70),
@@ -380,34 +473,30 @@ class _CameraStreamPageState extends State<CameraStreamPage>
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Row(
               children: [
-                // Flip camera
                 _iconBtn(Icons.flip_camera_ios, _flipCamera),
                 const SizedBox(width: 8),
-                // Connect / Disconnect
                 Expanded(
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
-                          wsConnected ? Colors.orange : Colors.blue,
+                          _wsConnected ? Colors.orange : Colors.blue,
                       foregroundColor: Colors.white,
                     ),
-                    onPressed:
-                        wsConnected ? _disconnectWs : _connectWs,
+                    onPressed: _wsConnected ? _disconnectWs : _connectWs,
                     child:
-                        Text(wsConnected ? 'Disconnect' : 'Connect Server'),
+                        Text(_wsConnected ? 'Disconnect' : 'Reconnect'),
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Start / Stop stream
                 Expanded(
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor:
-                          _streaming ? Colors.red : Colors.green,
+                      backgroundColor: _streaming ? Colors.red : Colors.green,
                       foregroundColor: Colors.white,
                     ),
-                    onPressed:
-                        wsConnected ? (_streaming ? _stopStream : _startStream) : null,
+                    onPressed: _wsConnected
+                        ? (_streaming ? _stopStream : _startStream)
+                        : null,
                     child: Text(_streaming ? 'Stop' : 'Start Stream'),
                   ),
                 ),
@@ -498,8 +587,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Settings',
-              style: Theme.of(context).textTheme.titleLarge),
+          Text('Settings', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 12),
           TextField(
             controller: widget.wsUrlCtrl,
@@ -544,14 +632,11 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             ),
             items: const [
               DropdownMenuItem(
-                  value: ResolutionPreset.low,
-                  child: Text('Low (240p)')),
+                  value: ResolutionPreset.low, child: Text('Low (240p)')),
               DropdownMenuItem(
-                  value: ResolutionPreset.medium,
-                  child: Text('Medium (480p)')),
+                  value: ResolutionPreset.medium, child: Text('Medium (480p)')),
               DropdownMenuItem(
-                  value: ResolutionPreset.high,
-                  child: Text('High (720p)')),
+                  value: ResolutionPreset.high, child: Text('High (720p)')),
             ],
             onChanged: (v) {
               if (v != null) setState(() => _res = v);
@@ -562,7 +647,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () => widget.onSave(_fps, _res),
-              child: const Text('Save & Reconnect Camera'),
+              child: const Text('Save & Reconnect'),
             ),
           ),
           const SizedBox(height: 16),

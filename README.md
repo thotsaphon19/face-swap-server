@@ -16,6 +16,7 @@ Production-leaning MVP deploy setup for a mobile client → control plane/API �
 - **Two Flutter mobile clients**, each against a different API contract (see [Two Flutter clients in this repo](#two-flutter-clients-in-this-repo)):
   - `flutter_client/` — mirrors the `/v1/sessions` contract documented below
   - `mobile/` — an iVCam-inspired UI using a simplified, singular-session contract
+- **Primary iVCam-style camera streaming app** in `flutter_app/` — connection-first mobile app for real-time face-swap streaming
 - **PWA reference client** in `frontend/` showing the same contract `flutter_client/` uses
 - **CPU Docker image** for the control plane
 - **GPU Docker image** for local GPU or Runpod inference workers
@@ -55,6 +56,90 @@ This repo currently ships **two separate Flutter apps against two separate API
 contracts**. They are not interchangeable — pick the one that matches the
 backend routes you're running, or keep both if you're intentionally maintaining
 two client experiences.
+
+---
+
+## Flutter App — `flutter_app/` (Primary mobile camera streaming app)
+
+`flutter_app/` is the **recommended mobile app** for real-time face-swap
+streaming from a phone to the backend. It uses an iVCam-style connection-first
+flow:
+
+1. On launch, a **Connection Screen** loads the last-saved server URL and
+   attempts to reach `GET /health` automatically.
+2. Shows **Connecting / Connected / Failed** states clearly before enabling
+   the camera.
+3. Once connected, the **Camera Stream Screen** starts the camera and streams
+   JPEG frames over WebSocket to the backend.
+4. If the WebSocket drops, the app **auto-reconnects** (every 3 s) without
+   stopping the camera preview.
+
+### App roles
+
+| Directory | Role |
+|---|---|
+| `flutter_app/` | **Primary** — iVCam-style camera streaming app (this section) |
+| `flutter_client/` | Lightweight status/control app using `/v1/sessions` API |
+| `mobile/` | Alternative iVCam-inspired UI using simplified `/v1/session` API |
+
+### Prerequisites
+
+- Flutter ≥ 3.10 and Dart ≥ 3.1  (`flutter --version`)
+- Android SDK / Android Studio with a connected device or emulator (API 21+)
+- A running backend instance (see Quick Start section)
+
+### Quick start
+
+```bash
+cd flutter_app
+flutter pub get
+flutter run          # hot-reload on connected device/emulator
+```
+
+### Server URL format
+
+Enter the HTTP base URL of your backend in the Connection Screen:
+
+```
+http://192.168.1.100          # local network
+http://your-server.example.com
+```
+
+The app automatically:
+- checks `http://SERVER/health` to verify connectivity
+- connects the WebSocket at `ws://SERVER/ws` (or `wss://` for HTTPS)
+
+### Auth token
+
+Set the `SECRET_TOKEN` from your server's `.env` in the **Auth Token** field.
+Leave blank if the server runs without a token.
+
+### Build release APK (Android)
+
+```bash
+cd flutter_app
+flutter pub get
+flutter build apk --release
+# APK output: flutter_app/build/app/outputs/flutter-apk/app-release.apk
+```
+
+Transfer the APK to your device with `adb` or copy it manually:
+
+```bash
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+### Build for iOS
+
+```bash
+cd flutter_app
+flutter pub get
+flutter build ios --release
+```
+
+Open `flutter_app/ios/Runner.xcworkspace` in Xcode to archive and deploy.
+
+---
 
 | | `flutter_client/` | `mobile/` |
 |---|---|---|
