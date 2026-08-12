@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#0A84FF" />
-    <corners android:radius="12dp" />
-</shape>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/ic_launcher_background" />
+    <item android:gravity="center" android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>
