@@ -114,7 +114,6 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
         await prefs.setString('serverUrl', rawUrl.trim());
         await prefs.setString('token', token.trim());
         setState(() => _state = _ConnState.connected);
-        _retryTimer?.cancel();
         await Future.delayed(const Duration(milliseconds: 600));
         if (mounted) widget.onConnected(_toWsUrl(rawUrl), token.trim());
       } else {
