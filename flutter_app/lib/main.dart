@@ -106,6 +106,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
   late String _wsUrl;
   late String _token;
   int _fps = 8;
+  int _frameIntervalMs = 125;
   ResolutionPreset _resolution = ResolutionPreset.medium;
 
   late final TextEditingController _wsUrlCtrl;
@@ -129,8 +130,10 @@ class _CameraStreamPageState extends State<CameraStreamPage>
 
   Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
+    final savedFps = prefs.getInt('fps') ?? _fps;
     setState(() {
-      _fps = prefs.getInt('fps') ?? _fps;
+      _fps = savedFps;
+      _frameIntervalMs = (1000 / (_fps <= 0 ? 1 : _fps)).round();
     });
   }
 
@@ -239,9 +242,8 @@ class _CameraStreamPageState extends State<CameraStreamPage>
       if (!_streaming) return;
       if (_pendingFrame || !_wsConnected) return;
       final now = DateTime.now();
-      final minIntervalMs = (1000 / (_fps <= 0 ? 1 : _fps)).round();
       if (_lastFrameSentAt != null &&
-          now.difference(_lastFrameSentAt!).inMilliseconds < minIntervalMs) {
+          now.difference(_lastFrameSentAt!).inMilliseconds < _frameIntervalMs) {
         return;
       }
       final Uint8List? jpegBytes = _extractJpeg(image);
@@ -287,6 +289,7 @@ class _CameraStreamPageState extends State<CameraStreamPage>
           _token = _tokenCtrl.text.trim();
           setState(() {
             _fps = fps;
+            _frameIntervalMs = (1000 / (fps <= 0 ? 1 : fps)).round();
             _resolution = res;
           });
           await _savePrefs();

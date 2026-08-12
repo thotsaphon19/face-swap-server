@@ -20,6 +20,7 @@ Notes:
 - Android Gradle wrapper is included in `android/gradlew` and `android/gradle/wrapper/`.
 - First launch opens a server connection screen.  
   Default URL shown: `http://192.168.1.100:8000`
+  (override with `--dart-define=DEFAULT_SERVER_URL=http://YOUR_SERVER:8000`)
 - Camera starts only after server connection succeeds.
 - Debug build allows LAN HTTP/WS connections for local face-swap servers.
 - Release build keeps cleartext blocked; use HTTPS/WSS server URLs.

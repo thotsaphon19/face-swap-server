@@ -24,7 +24,10 @@ class ConnectionScreen extends StatefulWidget {
 enum _ConnState { idle, connecting, connected, failed }
 
 class _ConnectionScreenState extends State<ConnectionScreen> {
-  static const String _defaultServerUrl = 'http://192.168.1.100:8000';
+  static const String _defaultServerUrl = String.fromEnvironment(
+    'DEFAULT_SERVER_URL',
+    defaultValue: 'http://192.168.1.100:8000',
+  );
   final _urlCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
   Timer? _retryTimer;
