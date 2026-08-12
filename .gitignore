@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+*.tgz
+model/
+node_modules/
+
+# Flutter
+flutter_client/.dart_tool/
+flutter_client/.flutter-plugins
+flutter_client/.flutter-plugins-dependencies
+flutter_client/build/
+flutter_client/.packages

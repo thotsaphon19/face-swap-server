@@ -1,0 +1,37 @@
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    APP_ROLE=inference \
+    ENABLE_NGINX=false \
+    WORKER_PORT=8000 \
+    UVICORN_WORKERS=1 \
+    MODEL_DIR=/workspace/model/checkpoints \
+    INSWAPPER_MODEL=inswapper_128.onnx \
+    FACE_ANALYSIS_NAME=buffalo_l \
+    FACE_DET_SIZE=256 \
+    OUTPUT_JPEG_QUALITY=72 \
+    OPENCV_THREADS=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-dev build-essential git curl \
+      libglib2.0-0 libgl1 libsm6 libxext6 libxrender1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+COPY backend/requirements-gpu.txt /tmp/requirements-gpu.txt
+RUN python3 -m pip install --no-cache-dir -r /tmp/requirements-gpu.txt
+
+COPY backend /app/backend
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=30s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
+CMD ["python3", "-m", "uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--ws-ping-interval", "15", "--ws-ping-timeout", "15"]

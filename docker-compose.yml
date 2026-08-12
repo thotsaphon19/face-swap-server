@@ -1,0 +1,47 @@
+services:
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: control-plane
+      ENABLE_NGINX: "true"
+      WORKER_PORT: 8000
+      UVICORN_WORKERS: 1
+    ports:
+      - "80:80"
+    volumes:
+      - ./model:/workspace/model
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+  gpu-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    profiles:
+      - local-gpu
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: inference
+      ENABLE_NGINX: "false"
+      WORKER_PORT: 8000
+      UVICORN_WORKERS: 1
+    expose:
+      - "8000"
+    volumes:
+      - ./model:/workspace/model
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

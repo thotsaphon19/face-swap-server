@@ -1,0 +1,12 @@
+:root{font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+body{margin:12px;background:#0f1720;color:#e6eef8}
+main{max-width:1100px;margin:0 auto}
+h1{margin-bottom:8px}
+#controls{margin-bottom:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+#controls label{display:flex;gap:6px;align-items:center}
+button{padding:8px 12px;border-radius:6px;border:1px solid #2b3440;background:#111827;color:#fff;cursor:pointer}
+#videoArea{display:flex;gap:16px}
+.column{flex:1}
+video{width:100%;height:auto;background:#000;border-radius:6px}
+img{width:100%;height:auto;border-radius:6px;background:#000}
+#status{margin-top:12px;font-size:14px;color:#9fb3d6}

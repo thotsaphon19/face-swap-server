@@ -1,0 +1,11 @@
+fastapi==0.100.0
+uvicorn[standard]==0.22.0
+python-multipart==0.0.6
+pillow==10.0.0
+opencv-python-headless==4.8.1.78
+numpy==1.26.0
+requests==2.31.0
+websockets==11.0.3
+# torch / torchvision / torchaudio installed per environment (GPU container)# Real GPU face-swap inference (install in the GPU worker image)
+insightface==0.7.3
+onnxruntime-gpu==1.18.0
