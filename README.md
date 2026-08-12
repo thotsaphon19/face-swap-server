@@ -13,8 +13,10 @@ Production-leaning MVP deploy setup for a mobile client → control plane/API �
   - `POST /v1/sessions/{session_id}/stop`
   - `POST /v1/process_frame`
   - `WS /ws`
-- **Flutter mobile client** in `flutter_client/` (Android/iOS) — mirrors the contract below
-- **PWA reference client** in `frontend/` showing the same contract the Flutter app uses
+- **Two Flutter mobile clients**, each against a different API contract (see [Two Flutter clients in this repo](#two-flutter-clients-in-this-repo)):
+  - `flutter_client/` — mirrors the `/v1/sessions` contract documented below
+  - `mobile/` — an iVCam-inspired UI using a simplified, singular-session contract
+- **PWA reference client** in `frontend/` showing the same contract `flutter_client/` uses
 - **CPU Docker image** for the control plane
 - **GPU Docker image** for local GPU or Runpod inference workers
 - **docker-compose.yml** for:
@@ -41,6 +43,104 @@ The repository still uses a dummy inference model by default. Replace `load_mode
 
 ### Final single-machine path
 
+Notes:
+- For real-time low-latency, WebRTC (aiortc/pion) is preferred instead of WebSocket frames. This repo uses a WebSocket binary frame approach for simplicity.
+- Replace the dummy model loader in backend/app.py with your real model loading & inference steps.
+
+---
+
+## Two Flutter clients in this repo
+
+This repo currently ships **two separate Flutter apps against two separate API
+contracts**. They are not interchangeable — pick the one that matches the
+backend routes you're running, or keep both if you're intentionally maintaining
+two client experiences.
+
+| | `flutter_client/` | `mobile/` |
+|---|---|---|
+| Style | Matches the documented `/v1/sessions` control-plane API below | iVCam-inspired home screen, simplified singular-session API |
+| Session create | `POST /v1/sessions` | `POST /v1/session` |
+| Session fetch | `GET /v1/sessions/{session_id}` | `GET /v1/session/:id` |
+| Session end | `POST /v1/sessions/{session_id}/stop` | `DELETE /v1/session/:id` |
+| Discovery/health | `GET /v1/client-config` | `GET /v1/info` |
+
+If your backend only implements the `/v1/sessions/...` routes documented in
+this README, the `mobile/` client's `/v1/session`, `/v1/info`, and `DELETE`
+endpoints will 404 until equivalent routes are added to `backend/app.py`.
+
+## Flutter Mobile App — `mobile/` (iVCam-style client)
+
+The `mobile/` directory contains a Flutter app that provides an iVCam-inspired
+home screen for searching, connecting to, and monitoring the face-swap backend.
+It targets a simplified, singular-session variant of the API (see table above).
+
+### Prerequisites
+- Flutter ≥ 3.10 (`flutter --version`)
+- A running instance of the backend (see Quick Start above)
+
+### Setup
+
+```bash
+cd mobile
+flutter pub get
+```
+
+Configure the server URL and API token in the app's Settings screen (top-right
+gear icon) or edit `mobile/lib/screens/settings_screen.dart`:
+
+```
+Default server URL : http://192.168.1.49:8000
+Default API token  : testing123   (matches SECRET_TOKEN in .env)
+```
+
+### Run on a device / emulator
+
+```bash
+cd mobile
+flutter run
+```
+
+### Build release APK
+
+```bash
+cd mobile
+flutter build apk --release
+# Output: mobile/build/app/outputs/flutter-apk/app-release.apk
+```
+
+### Connection flow
+
+1. App starts → begins health-check polling (`GET /v1/info`) every 5 s.
+2. When the server responds, the IP and device info are shown on screen.
+3. Tap the phone icon (or **Connect** button) → `POST /v1/session` creates a
+   session; the app moves to *Connected* state.
+4. Tap **Disconnect** or **Refresh** to end the session (`DELETE /v1/session/:id`).
+5. Settings screen lets you change the server URL and token; saved to device
+   storage via `shared_preferences`.
+
+### Backend API contract (used by the `mobile/` Flutter app — NOT the same as `flutter_client/`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | — | Liveness check |
+| GET | `/v1/info` | — | Server IP, hostname, device |
+| POST | `/v1/session` | required | Create a session → `{session_id}` |
+| GET | `/v1/session/:id` | required | Session details |
+| DELETE | `/v1/session/:id` | required | End session |
+| POST | `/v1/process_frame` | required | Process a JPEG frame |
+| WS | `/ws?token=…` | query | Streaming frame processing |
+
+### Running the Flutter tests
+
+```bash
+cd mobile
+flutter test
+```
+
+---
+
+## Flutter Mobile App — `flutter_client/`
+
 Use the same compose stack with the `local-gpu` profile:
 
 - `control-plane` container serves Nginx + FastAPI
@@ -55,7 +155,8 @@ That gives the same control-plane flow you test on DigitalOcean + Runpod, but co
 |------|---------|
 | `backend/app.py` | FastAPI backend — session API, HTTP REST + WebSocket binary frame handler |
 | `frontend/` | PWA reference web client |
-| `flutter_client/` | Flutter mobile app for Android / iOS (package: `face_swap_client`) |
+| `flutter_client/` | Flutter mobile app for Android / iOS, `/v1/sessions` contract (package: `face_swap_client`) |
+| `mobile/` | Flutter mobile app for Android / iOS, simplified `/v1/session` contract (iVCam-style UI) |
 | `deploy/` | Nginx config + `bootstrap.sh` setup script |
 | `Dockerfile` | CPU production image (control plane) |
 | `Dockerfile.gpu` | GPU production image (CUDA, inference worker) |
@@ -70,7 +171,7 @@ Copy `.env.example` to `.env` and update:
 | `APP_ROLE` | yes | `control-plane` or `inference` |
 | `ENABLE_NGINX` | yes | `true` for public ingress container, `false` for worker-only |
 | `PUBLIC_BASE_URL` | yes | Public base URL used in generated session/client URLs |
-| `SECRET_TOKEN` | yes | ****** for clients |
+| `SECRET_TOKEN` | yes | required for clients |
 | `RUNPOD_SECRET_TOKEN` | yes | Token used between control plane and GPU worker |
 | `RUNPOD_BASE_URL` | no | Empty for local CPU test, Runpod URL or `http://gpu-worker:8000` otherwise |
 | `MODEL_DIR` | yes | Where models are mounted |
@@ -135,7 +236,7 @@ Example response:
 
 ### 2. Create + manage a session
 
-`POST /v1/sessions` with `Authorization: ******`
+`POST /v1/sessions` with `Authorization: <bearer token>`
 
 Example body:
 
@@ -185,7 +286,7 @@ Then call:
 
 `POST /v1/process_frame`
 
-- Header: `Authorization: ******`
+- Header: `Authorization: <bearer token>`
 - Optional header: `X-Session-Id: <session_id>`
 - Body: `multipart/form-data` with `file=<jpeg>`
 

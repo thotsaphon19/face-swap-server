@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import socket
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
@@ -44,7 +45,7 @@ logger = logging.getLogger("face-swap-server")
 
 app = FastAPI(title="face-swap-server", version="0.2.0")
 
-# Allow requests from Flutter app (and web PWA).
+# Allow requests from Flutter apps (both flutter_client/ and mobile/) and the web PWA.
 # When CORS_ORIGINS is "*", credentials must be disabled (CORS spec requirement).
 _cors_wildcard = CORS_ORIGINS == ["*"] or not CORS_ORIGINS
 app.add_middleware(
@@ -58,6 +59,10 @@ app.add_middleware(
 _model = None
 _model_lock = asyncio.Lock()
 _session_lock = asyncio.Lock()
+# Single shared session store used by BOTH API contracts:
+#   - flutter_client/ : /v1/sessions (plural, full lifecycle)
+#   - mobile/          : /v1/session  (singular, simplified)
+# A session created through either contract is visible through the other.
 _sessions: dict[str, dict[str, Any]] = {}
 
 
@@ -202,7 +207,7 @@ async def process_image_locally(content: bytes) -> tuple[bytes, int]:
 
 async def proxy_process_frame(content: bytes, filename: str, content_type: str, session_id: Optional[str]) -> tuple[bytes, str, int]:
     ensure_max_size(content)
-    headers = {"Authorization": f"******"}
+    headers = {"Authorization": f"Bearer {RUNPOD_SECRET_TOKEN}"}
     if session_id:
         headers["X-Session-Id"] = session_id
     files = {"file": (filename or "frame.jpg", content, content_type or "image/jpeg")}
@@ -375,6 +380,66 @@ async def stop_session_endpoint(session_id: str, request: Request, authorization
     await touch_session(session_id, "stopped")
     record = await get_session_or_404(session_id)
     return session_response(record, request)
+
+
+# ---------------------------------------------------------------------------
+# Simplified singular-session endpoints used by the `mobile/` (iVCam-style)
+# Flutter client. These share the SAME _sessions store as the /v1/sessions
+# endpoints above via create_session()/get_session_or_404(), so a session
+# created through either contract is visible through the other.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/info")
+async def server_info():
+    """Public (no-auth) server info used by the `mobile/` client's home-screen
+    health-check polling, so it can confirm connectivity and display basic
+    server details before the user connects."""
+    try:
+        hostname = socket.gethostname()
+        host_ip = socket.gethostbyname(hostname)
+    except Exception:
+        hostname = "unknown"
+        host_ip = "unknown"
+    return {
+        "server": "face-swap-server",
+        "version": app.version,
+        "device": DEVICE,
+        "hostname": hostname,
+        "ip": host_ip,
+    }
+
+
+@app.post("/v1/session")
+async def create_session_singular(authorization: str | None = Header(None)):
+    """Simplified session-create endpoint for the `mobile/` client. Internally
+    delegates to the same session store as POST /v1/sessions."""
+    check_auth_header(authorization)
+    record = await create_session(SessionCreateRequest(client_name="mobile"))
+    return {"session_id": record["session_id"]}
+
+
+@app.get("/v1/session/{session_id}")
+async def get_session_singular(session_id: str, authorization: str | None = Header(None)):
+    check_auth_header(authorization)
+    record = await get_session_or_404(session_id)
+    return {
+        "session_id": record["session_id"],
+        "status": record["status"],
+        "created_at": record["created_at"],
+        "updated_at": record["updated_at"],
+    }
+
+
+@app.delete("/v1/session/{session_id}")
+async def delete_session_singular(session_id: str, authorization: str | None = Header(None)):
+    check_auth_header(authorization)
+    async with _session_lock:
+        if session_id not in _sessions:
+            raise HTTPException(status_code=404, detail="Session not found")
+        del _sessions[session_id]
+    logger.info("Session deleted via /v1/session/%s (mobile client)", session_id)
+    return {"deleted": True}
 
 
 @app.post("/v1/process_frame")
